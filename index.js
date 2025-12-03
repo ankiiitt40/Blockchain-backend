@@ -15,6 +15,22 @@ app.use(cors());
 app.use(express.json());
 
 // ----------------------
+// ROOT ROUTE (Fix for Render)
+// ----------------------
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "Backend is running 🚀",
+    routes: {
+      transactions: "/api/transactions",
+      deposits: "/api/deposits",
+      withdrawals: "/api/withdrawals",
+      balance: "/api/balance",
+    },
+  });
+});
+
+// ----------------------
 // DATABASE CONNECT
 // ----------------------
 mongoose
@@ -108,7 +124,7 @@ app.post("/api/withdrawals", async (req, res) => {
   }
 });
 
-// ✅ ADMIN APPROVE / REJECT WITHDRAWAL
+// ADMIN UPDATE WITHDRAWAL STATUS
 app.put("/api/withdrawals/:id", async (req, res) => {
   const { status } = req.body;
 
@@ -121,9 +137,8 @@ app.put("/api/withdrawals/:id", async (req, res) => {
 });
 
 // -----------------------------------------------------------
-// 🔥 QR PAYMENT AUTO-DETECTION SYSTEM
+// QR PAYMENT AUTO-DETECTION SYSTEM
 // -----------------------------------------------------------
-
 const TRC20_ADDRESS = "TWCtpUaW6dzmgi9B2quh3VoxVUmThNLcxR";
 const BEP20_ADDRESS = "0x4d8322883f4bd1f06e246e940efb2cdd5ed708f8";
 
@@ -133,9 +148,7 @@ const BSCSCAN_API = process.env.BSCSCAN_KEY;
 cron.schedule("*/20 * * * * *", async () => {
   console.log("🔍 Checking blockchain for new payments...");
 
-  // ---------------------------
   // TRC20 SCAN
-  // ---------------------------
   try {
     const tron = await axios.get(
       `https://api.trongrid.io/v1/accounts/${TRC20_ADDRESS}/transactions`
@@ -166,9 +179,7 @@ cron.schedule("*/20 * * * * *", async () => {
     console.log("❌ TRC20 scan error:", err.message);
   }
 
-  // ---------------------------
-  // BEP20 SCAN (ETHERSCAN V2)
-  // ---------------------------
+  // BEP20 SCAN
   try {
     const bsc = await axios.get(
       `https://api.etherscan.io/v2/api?chainid=56&module=account&action=tokentx&address=${BEP20_ADDRESS}&sort=desc&apikey=${BSCSCAN_API}`
