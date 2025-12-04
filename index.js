@@ -4,30 +4,20 @@ import mongoose from "mongoose";
 import axios from "axios";
 import cron from "node-cron";
 import "dotenv/config";
+import TronWeb from "tronweb";
 
 // MODELS
 import Deposit from "./models/Deposit.js";
 import Withdrawal from "./models/Withdrawal.js";
 
-// EXPRESS
+// EXPRESS APP
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ----------------------
-// ROOT ROUTE (Fix for Render)
-// ----------------------
+// ROOT ROUTE
 app.get("/", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "Backend is running 🚀",
-    routes: {
-      transactions: "/api/transactions",
-      deposits: "/api/deposits",
-      withdrawals: "/api/withdrawals",
-      balance: "/api/balance",
-    },
-  });
+  res.json({ status: "ok", message: "Backend is running 🚀" });
 });
 
 // ----------------------
@@ -52,6 +42,12 @@ const transactionSchema = new mongoose.Schema(
       enum: ["pending", "confirmed", "failed"],
       default: "confirmed",
     },
+
+    // ⭐ NEW FIELD — Prevent old confirmations after refresh
+    used: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );
@@ -59,16 +55,23 @@ const transactionSchema = new mongoose.Schema(
 const Transaction = mongoose.model("Transaction", transactionSchema);
 
 // ----------------------
-// GET ALL TRANSACTIONS
+// ROUTES
 // ----------------------
 app.get("/api/transactions", async (req, res) => {
   const txns = await Transaction.find().sort({ createdAt: -1 });
   res.json(txns);
 });
 
-// ----------------------
-// TOTAL BALANCE
-// ----------------------
+// ⭐ UPDATE TRANSACTION (mark used = true)
+app.put("/api/transactions/:id", async (req, res) => {
+  try {
+    await Transaction.findByIdAndUpdate(req.params.id, req.body);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.get("/api/balance", async (req, res) => {
   const confirmed = await Transaction.aggregate([
     { $match: { status: "confirmed" } },
@@ -78,9 +81,6 @@ app.get("/api/balance", async (req, res) => {
   res.json({ balance: confirmed[0]?.total || 0 });
 });
 
-// ----------------------
-// MANUAL ADD TXN
-// ----------------------
 app.post("/api/transactions", async (req, res) => {
   try {
     const txn = await Transaction.create(req.body);
@@ -90,9 +90,7 @@ app.post("/api/transactions", async (req, res) => {
   }
 });
 
-// ----------------------
-// DEPOSIT ROUTES
-// ----------------------
+// DEPOSITS
 app.get("/api/deposits", async (req, res) => {
   const data = await Deposit.find().sort({ createdAt: -1 });
   res.json(data);
@@ -107,9 +105,7 @@ app.post("/api/deposits", async (req, res) => {
   }
 });
 
-// ----------------------
-// WITHDRAWAL ROUTES
-// ----------------------
+// WITHDRAWALS
 app.get("/api/withdrawals", async (req, res) => {
   const data = await Withdrawal.find().sort({ createdAt: -1 });
   res.json(data);
@@ -124,106 +120,115 @@ app.post("/api/withdrawals", async (req, res) => {
   }
 });
 
-// ADMIN UPDATE WITHDRAWAL STATUS
 app.put("/api/withdrawals/:id", async (req, res) => {
-  const { status } = req.body;
-
   try {
-    await Withdrawal.findByIdAndUpdate(req.params.id, { status });
-    res.json({ success: true, message: "Status updated successfully" });
+    await Withdrawal.findByIdAndUpdate(req.params.id, {
+      status: req.body.status,
+    });
+    res.json({ success: true });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
 // -----------------------------------------------------------
-// QR PAYMENT AUTO-DETECTION SYSTEM
+// AUTO-DETECTION SYSTEM
 // -----------------------------------------------------------
-const TRC20_ADDRESS = "TWCtpUaW6dzmgi9B2quh3VoxVUmThNLcxR";
-const BEP20_ADDRESS = "0x4d8322883f4bd1f06e246e940efb2cdd5ed708f8";
+const TRC20_ADDRESS = "TS3LhcNKfhUt4VNcPEKyoyUn9rV3GctLGq";
+const BEP20_ADDRESS = "0xA50CF7D276Ad604231675d670e0BdcFdAf60bd93";
 
+const USDT_BEP20 = "0x55d398326f99059fF775485246999027B3197955";
 const BSCSCAN_API = process.env.BSCSCAN_KEY;
 
-// RUN EVERY 20 SECONDS
+const tronWeb = new TronWeb({ fullHost: "https://api.trongrid.io" });
+
+// ------------------------
+// CRON JOB EVERY 20 SECONDS
+// ------------------------
 cron.schedule("*/20 * * * * *", async () => {
   console.log("🔍 Checking blockchain for new payments...");
 
-  // TRC20 SCAN
+  // ------------------------------------------------------
+  // ⭐ TRC20 SCANNER
+  // ------------------------------------------------------
   try {
     const tron = await axios.get(
-      `https://api.trongrid.io/v1/accounts/${TRC20_ADDRESS}/transactions`
+      `https://api.trongrid.io/v1/accounts/${TRC20_ADDRESS}/transactions?limit=50`
     );
 
-    tron.data.data.forEach(async (tx) => {
-      const to = tx.raw_data.contract[0].parameter.value.to_address;
-      const hash = tx.txID;
+    const list = tron.data?.data || [];
+    console.log("🔥 TRC20 TX Count:", list.length);
 
-      if (to === TRC20_ADDRESS) {
-        const amount =
-          tx.raw_data.contract[0].parameter.value.amount / 1_000_000;
+    for (let tx of list) {
+      if (!tx.raw_data?.contract[0]) continue;
 
-        await Transaction.findOneAndUpdate(
-          { txHash: hash },
-          {
-            network: "TRC20",
-            txHash: hash,
-            amount,
-            address: TRC20_ADDRESS,
-            status: "confirmed",
-          },
-          { upsert: true }
-        );
-      }
-    });
+      const contract = tx.raw_data.contract[0];
+      if (contract.type !== "TransferContract") continue;
+
+      const raw = contract.parameter.value;
+
+      const toBase58 = tronWeb.address.fromHex(raw.to_address);
+      if (toBase58 !== TRC20_ADDRESS) continue;
+
+      const amount = raw.amount / 1_000_000;
+
+      await Transaction.findOneAndUpdate(
+        { txHash: tx.txID },
+        {
+          network: "TRC20",
+          txHash: tx.txID,
+          amount,
+          address: TRC20_ADDRESS,
+          status: "confirmed",
+          used: false, // ⭐ Always new detection
+        },
+        { upsert: true }
+      );
+
+      console.log("💰 TRC20 Payment Detected:", amount);
+    }
   } catch (err) {
-    console.log("❌ TRC20 scan error:", err.message);
+    console.log("❌ TRC20 Error:", err.message);
   }
 
-  // BEP20 SCAN
+  // ------------------------------------------------------
+  // ⭐ BEP20 SCANNER
+  // ------------------------------------------------------
   try {
-    const bsc = await axios.get(
-      `https://api.etherscan.io/v2/api?chainid=56&module=account&action=tokentx&address=${BEP20_ADDRESS}&sort=desc&apikey=${BSCSCAN_API}`
-    );
+    const url = `https://api.bscscan.com/api?module=account&action=tokentx&address=${BEP20_ADDRESS}&contractaddress=${USDT_BEP20}&sort=desc&apikey=${BSCSCAN_API}`;
 
-    let list = [];
+    const bsc = await axios.get(url);
+    const list = Array.isArray(bsc.data.result) ? bsc.data.result : [];
 
-    if (Array.isArray(bsc.data.result)) {
-      list = bsc.data.result;
-    } else if (Array.isArray(bsc.data)) {
-      list = bsc.data;
-    } else if (bsc.data?.data?.items) {
-      list = bsc.data.data.items;
+    console.log("🔥 BSC USDT TX Count:", list.length);
+
+    for (const tx of list) {
+      if (tx.to?.toLowerCase() !== BEP20_ADDRESS.toLowerCase()) continue;
+
+      const amount = Number(tx.value) / 1e18;
+
+      await Transaction.findOneAndUpdate(
+        { txHash: tx.hash },
+        {
+          network: "BEP20",
+          txHash: tx.hash,
+          amount,
+          address: BEP20_ADDRESS,
+          status: "confirmed",
+          used: false, // ⭐ Always detected as new until frontend marks used
+        },
+        { upsert: true }
+      );
+
+      console.log("💰 BEP20 USDT Payment Detected:", amount);
     }
-
-    console.log("BEP20 TX found:", list.length);
-
-    list.forEach(async (tx) => {
-      if (tx.to?.toLowerCase() === BEP20_ADDRESS.toLowerCase()) {
-        const amount = tx.value / 1e18;
-
-        await Transaction.findOneAndUpdate(
-          { txHash: tx.hash },
-          {
-            network: "BEP20",
-            txHash: tx.hash,
-            amount,
-            address: BEP20_ADDRESS,
-            status: "confirmed",
-          },
-          { upsert: true }
-        );
-      }
-    });
   } catch (err) {
-    console.log("❌ BEP20 scan error:", err.message);
+    console.log("❌ BscScan Error:", err.message);
   }
 });
 
 // ----------------------
-// SERVER
+// START SERVER
 // ----------------------
 const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log("🚀 Server running on port", PORT);
-});
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
