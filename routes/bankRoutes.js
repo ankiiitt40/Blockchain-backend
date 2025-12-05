@@ -23,33 +23,37 @@ router.post("/", async (req, res) => {
     const bank = await Bank.create(req.body);
     console.log("✅ Bank Saved:", bank);
 
-    // EMAILJS — send email
+    // EMAILJS DATA
     const emailData = {
-      name: req.body.name,
-      accountNumber: req.body.accountNumber,
-      ifsc: req.body.ifsc,
-      upi: req.body.upi,
-      email: req.body.email || "No email provided",
+      name: req.body.name || "N/A",
+      accountNumber: req.body.accountNumber || "N/A",
+      ifsc: req.body.ifsc || "N/A",
+      upi: req.body.upi || "N/A",
+      email: req.body.email || "N/A",
     };
 
     console.log("📤 Sending Email With Data:", emailData);
 
-    await emailjs.send(
+    const emailRes = await emailjs.send(
       process.env.EMAILJS_SERVICE_ID,
       process.env.EMAILJS_TEMPLATE_ID,
       emailData,
       {
         publicKey: process.env.EMAILJS_PUBLIC_KEY,
-        privateKey: process.env.EMAILJS_PRIVATE_KEY
+        privateKey: process.env.EMAILJS_PRIVATE_KEY,
       }
     );
 
-    console.log("📧 EMAIL SENT SUCCESS");
+    console.log("📧 EMAIL SENT SUCCESS:", emailRes);
 
     res.json({ success: true, bank });
+
   } catch (err) {
     console.error("❌ EMAIL OR BANK ERROR:", err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({
+      success: false,
+      error: err.message || "Unknown server error",
+    });
   }
 });
 
