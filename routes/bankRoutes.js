@@ -1,6 +1,5 @@
 import express from "express";
 import Bank from "../models/bank.js";
-import emailjs from "@emailjs/nodejs";
 
 const router = express.Router();
 
@@ -15,45 +14,17 @@ router.get("/", async (req, res) => {
   }
 });
 
-// ADD NEW BANK
+// ADD NEW BANK (EMAILJS REMOVED)
 router.post("/", async (req, res) => {
   try {
-    console.log("📩 Bank Request Received:", req.body);
+    console.log("📩 Bank Request:", req.body);
 
     const bank = await Bank.create(req.body);
-    console.log("✅ Bank Saved:", bank);
-
-    // EMAILJS DATA
-    const emailData = {
-      name: req.body.name || "N/A",
-      accountNumber: req.body.accountNumber || "N/A",
-      ifsc: req.body.ifsc || "N/A",
-      upi: req.body.upi || "N/A",
-      email: req.body.email || "N/A",
-    };
-
-    console.log("📤 Sending Email With Data:", emailData);
-
-    const emailRes = await emailjs.send(
-      process.env.EMAILJS_SERVICE_ID,
-      process.env.EMAILJS_TEMPLATE_ID,
-      emailData,
-      {
-        publicKey: process.env.EMAILJS_PUBLIC_KEY,
-        privateKey: process.env.EMAILJS_PRIVATE_KEY,
-      }
-    );
-
-    console.log("📧 EMAIL SENT SUCCESS:", emailRes);
 
     res.json({ success: true, bank });
-
   } catch (err) {
-    console.error("❌ EMAIL OR BANK ERROR:", err);
-    res.status(500).json({
-      success: false,
-      error: err.message || "Unknown server error",
-    });
+    console.error("❌ BANK SAVE ERROR:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
