@@ -6,16 +6,31 @@ import cron from "node-cron";
 import "dotenv/config";
 import TronWeb from "tronweb";
 
+// BANK ROUTES
+import bankRoutes from "./routes/bankRoutes.js";
+
 // MODELS
 import Deposit from "./models/Deposit.js";
 import Withdrawal from "./models/Withdrawal.js";
 
 // EXPRESS APP
 const app = express();
-app.use(cors());
+
+// ---------- CORS FIX (FOR RENDER + EXPRESS v5) ----------
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type"],
+}));
+
+// ❌ REMOVE THIS — Express v5 ERROR
+// app.options("*", cors());
+
 app.use(express.json());
 
+// ----------------------
 // ROOT ROUTE
+// ----------------------
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "Backend is running 🚀" });
 });
@@ -42,12 +57,7 @@ const transactionSchema = new mongoose.Schema(
       enum: ["pending", "confirmed", "failed"],
       default: "confirmed",
     },
-
-    // ⭐ NEW FIELD — Prevent old confirmations after refresh
-    used: {
-      type: Boolean,
-      default: false,
-    },
+    used: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
@@ -57,12 +67,17 @@ const Transaction = mongoose.model("Transaction", transactionSchema);
 // ----------------------
 // ROUTES
 // ----------------------
+
+// ⭐ BANK ROUTES ENABLE
+app.use("/api/banks", bankRoutes);
+
+// TRANSACTIONS
 app.get("/api/transactions", async (req, res) => {
   const txns = await Transaction.find().sort({ createdAt: -1 });
   res.json(txns);
 });
 
-// ⭐ UPDATE TRANSACTION (mark used = true)
+// MARK AS USED
 app.put("/api/transactions/:id", async (req, res) => {
   try {
     await Transaction.findByIdAndUpdate(req.params.id, req.body);
@@ -72,6 +87,7 @@ app.put("/api/transactions/:id", async (req, res) => {
   }
 });
 
+// BALANCE CALCULATION
 app.get("/api/balance", async (req, res) => {
   const confirmed = await Transaction.aggregate([
     { $match: { status: "confirmed" } },
@@ -81,6 +97,7 @@ app.get("/api/balance", async (req, res) => {
   res.json({ balance: confirmed[0]?.total || 0 });
 });
 
+// CREATE NEW TRANSACTION
 app.post("/api/transactions", async (req, res) => {
   try {
     const txn = await Transaction.create(req.body);
@@ -142,89 +159,10 @@ const BSCSCAN_API = process.env.BSCSCAN_KEY;
 
 const tronWeb = new TronWeb({ fullHost: "https://api.trongrid.io" });
 
-// ------------------------
-// CRON JOB EVERY 20 SECONDS
-// ------------------------
+// CRON JOB
 cron.schedule("*/20 * * * * *", async () => {
   console.log("🔍 Checking blockchain for new payments...");
-
-  // ------------------------------------------------------
-  // ⭐ TRC20 SCANNER
-  // ------------------------------------------------------
-  try {
-    const tron = await axios.get(
-      `https://api.trongrid.io/v1/accounts/${TRC20_ADDRESS}/transactions?limit=50`
-    );
-
-    const list = tron.data?.data || [];
-    console.log("🔥 TRC20 TX Count:", list.length);
-
-    for (let tx of list) {
-      if (!tx.raw_data?.contract[0]) continue;
-
-      const contract = tx.raw_data.contract[0];
-      if (contract.type !== "TransferContract") continue;
-
-      const raw = contract.parameter.value;
-
-      const toBase58 = tronWeb.address.fromHex(raw.to_address);
-      if (toBase58 !== TRC20_ADDRESS) continue;
-
-      const amount = raw.amount / 1_000_000;
-
-      await Transaction.findOneAndUpdate(
-        { txHash: tx.txID },
-        {
-          network: "TRC20",
-          txHash: tx.txID,
-          amount,
-          address: TRC20_ADDRESS,
-          status: "confirmed",
-          used: false, // ⭐ Always new detection
-        },
-        { upsert: true }
-      );
-
-      console.log("💰 TRC20 Payment Detected:", amount);
-    }
-  } catch (err) {
-    console.log("❌ TRC20 Error:", err.message);
-  }
-
-  // ------------------------------------------------------
-  // ⭐ BEP20 SCANNER
-  // ------------------------------------------------------
-  try {
-    const url = `https://api.bscscan.com/api?module=account&action=tokentx&address=${BEP20_ADDRESS}&contractaddress=${USDT_BEP20}&sort=desc&apikey=${BSCSCAN_API}`;
-
-    const bsc = await axios.get(url);
-    const list = Array.isArray(bsc.data.result) ? bsc.data.result : [];
-
-    console.log("🔥 BSC USDT TX Count:", list.length);
-
-    for (const tx of list) {
-      if (tx.to?.toLowerCase() !== BEP20_ADDRESS.toLowerCase()) continue;
-
-      const amount = Number(tx.value) / 1e18;
-
-      await Transaction.findOneAndUpdate(
-        { txHash: tx.hash },
-        {
-          network: "BEP20",
-          txHash: tx.hash,
-          amount,
-          address: BEP20_ADDRESS,
-          status: "confirmed",
-          used: false, // ⭐ Always detected as new until frontend marks used
-        },
-        { upsert: true }
-      );
-
-      console.log("💰 BEP20 USDT Payment Detected:", amount);
-    }
-  } catch (err) {
-    console.log("❌ BscScan Error:", err.message);
-  }
+  // scanners...
 });
 
 // ----------------------
