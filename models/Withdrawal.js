@@ -1,14 +1,17 @@
-import mongoose from "mongoose";
+const selectedBank = banks[parseInt(bankIndex)];
 
-const withdrawalSchema = new mongoose.Schema(
-  {
-    userId: String,
-    amount: Number,
-    bankName: String,
-    accountNumber: String,
-    status: { type: String, default: "pending" },
-  },
-  { timestamps: true }
-);
+const body = {
+  userId: "demo",  // change later when you add authentication
+  amount: Number(amount),
+  bankName: selectedBank.name,
+  accountNumber: selectedBank.accountNumber,
+  status: "pending",
+};
 
-export default mongoose.model("Withdrawal", withdrawalSchema);
+const res = await fetch(`${API_BASE}/withdrawals`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+const data = await res.json();

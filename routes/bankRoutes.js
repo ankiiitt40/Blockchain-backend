@@ -10,11 +10,11 @@ router.get("/", async (req, res) => {
     res.json(banks);
   } catch (err) {
     console.error("❌ BANK FETCH ERROR:", err);
-    res.status(500).json({ success: false, error: err.message });
+    res.json({ success: false, error: err.message });
   }
 });
 
-// ADD NEW BANK (EMAILJS REMOVED)
+// ADD NEW BANK
 router.post("/", async (req, res) => {
   try {
     console.log("📩 Bank Request:", req.body);
@@ -22,9 +22,19 @@ router.post("/", async (req, res) => {
     const bank = await Bank.create(req.body);
 
     res.json({ success: true, bank });
+
   } catch (err) {
     console.error("❌ BANK SAVE ERROR:", err);
-    res.status(500).json({ success: false, error: err.message });
+
+    // 🔥 Return validation errors in clean format
+    if (err.name === "ValidationError") {
+      return res.json({
+        success: false,
+        error: Object.values(err.errors)[0].message, // send first error
+      });
+    }
+
+    res.json({ success: false, error: err.message });
   }
 });
 
